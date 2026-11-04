@@ -64,23 +64,30 @@ server {
 		alias /var/www/dehydrated;
 	}
 
-	#rewrite rule - send to https with an exception for provisioning
-	if ($uri !~* ^.*(provision|xml_cdr|firmware).*$) {
-		rewrite ^(.*) https://$host$1 permanent;
-		break;
-	}
-
-	#REST api
-	if ($uri ~* ^.*/api/.*$) {
-		rewrite ^(.*)/api/(.*)$ $1/api/index.php?rewrite_uri=$2 last;
-		break;
-	}
-
 	#single point of entry
 	location / {
+		#Send everything to https except for the exceptions
+		if ($request_uri !~* (provision|xml_cdr|firmware)) {
+			return 301 https://$host$request_uri;
+		}
+
 		root /var/www/fusionpbx/public;
 		index index.php;
 		try_files $uri $uri/ /public/index.php?$query_string;
+	}
+
+	#Fallback target of the try_files above. The exact match wins over
+	#every other location, and the file name must be stated explicitly
+	#because try_files does not update $fastcgi_script_name.
+	location = /public/index.php {
+		if ($request_uri !~* (provision|xml_cdr|firmware)) {
+			return 301 https://$host$request_uri;
+		}
+		fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+		#fastcgi_pass 127.0.0.1:9000;
+		fastcgi_index index.php;
+		include fastcgi_params;
+		fastcgi_param   SCRIPT_FILENAME /var/www/fusionpbx/public/index.php;
 	}
 
 	#multiple points of entry
@@ -94,25 +101,6 @@ server {
 
 	client_max_body_size 80M;
 	client_body_buffer_size 128k;
-
-	location ~ \.php$ {
-		fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
-		#fastcgi_pass 127.0.0.1:9000;
-		fastcgi_read_timeout 15m;
-		fastcgi_index index.php;
-		include fastcgi_params;
-		fastcgi_param   SCRIPT_FILENAME /var/www/fusionpbx$fastcgi_script_name;
-	}
-
-	# Allow the upgrade routines to run longer than normal
-	location = /core/upgrade/index.php {
-		fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
-		#fastcgi_pass 127.0.0.1:9000;
-		fastcgi_read_timeout 15m;
-		fastcgi_index index.php;
-		include fastcgi_params;
-		fastcgi_param   SCRIPT_FILENAME /var/www/fusionpbx$fastcgi_script_name;
-	}
 
 	# Disable viewing .htaccess & .htpassword & .db & .git
 	location ~ .htaccess {
@@ -168,9 +156,14 @@ server {
 	}
 
 	#REST api
-	if ($uri ~* ^.*/api/.*$) {
-		rewrite ^(.*)/api/(.*)$ $1/api/index.php?rewrite_uri=$2 last;
-		break;
+	location ~* ^.*/api/.*$ {
+		rewrite ^(.*)/api/(.*)$ $1/api/index.php?rewrite_uri=$2 break;
+		fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+		#fastcgi_pass 127.0.0.1:9000;
+		fastcgi_index index.php;
+		include fastcgi_params;
+		fastcgi_param   SCRIPT_FILENAME /var/www/fusionpbx/app/api/index.php;
+		fastcgi_param   SCRIPT_NAME /app/api/index.php;
 	}
 
 	#single point of entry
